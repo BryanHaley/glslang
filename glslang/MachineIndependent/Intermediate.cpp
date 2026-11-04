@@ -1945,7 +1945,7 @@ TOperator TIntermediate::mapTypeToConstructorOp(const TType& type) const
         op = EOpConstructStruct;
         break;
     case EbtSampler:
-        if (type.getSampler().isCombined())
+        if (type.getSampler().isCombined() || (type.getSampler().isImage() && getBindlessImageMode()))
             op = EOpConstructTextureSampler;
         break;
     case EbtFloat:

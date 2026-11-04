@@ -356,6 +356,14 @@ protected:
     bool linkageOnly;                  // true when visiting the set of objects in the AST present only for
                                        // establishing interface, whether or not they were statically used
     std::set<spv::Id> iOSet;           // all input/output variables from either static use or declaration of interface
+
+    // MGL: a bindless handle is a uvec2; x picks a texture out of a big table
+    // and y a sampler. Each texture type gets its own table.
+    std::unordered_map<spv::Id, spv::Id> mglBindlessTextures;
+    spv::Id mglBindlessSamplers = spv::NoResult;
+    unsigned int mglBindlessSet = 4;    // MGL uses sets 0, 1 and 3 itself
+    spv::Id mglBindlessLookup(const glslang::TType& type, spv::Id handle);
+    spv::Id mglBindlessTable(spv::Id elementType, unsigned int count, const char* name);
     const glslang::TIntermediate* glslangIntermediate;
     bool nanMinMaxClamp;               // true if use NMin/NMax/NClamp instead of FMin/FMax/FClamp
     spv::Id stdBuiltins;
@@ -3104,6 +3112,14 @@ bool TGlslangToSpvTraverser::visitUnary(glslang::TVisit /* visit */, glslang::TI
         operandNode = node->getOperand();
 
     operandNode->traverse(this);
+
+    if (node->getOp() == glslang::EOpPackUint2x32 && node->getBasicType() == glslang::EbtSampler) {
+        spv::Id handle = accessChainLoad(node->getOperand()->getType());
+        spv::Id looked = mglBindlessLookup(node->getType(), handle);
+        builder.clearAccessChain();
+        builder.setAccessChainRValue(looked);
+        return false;
+    }
 
     spv::Id operand = spv::NoResult;
 
@@ -6029,6 +6045,11 @@ spv::Id TGlslangToSpvTraverser::convertGlslangToSpvType(const glslang::TType& ty
         }
         break;
     case glslang::EbtSampler:
+        if ((qualifier.layoutBindlessSampler || qualifier.layoutBindlessImage) &&
+            !type.getSampler().isPureSampler()) {
+            spvType = builder.makeVectorType(builder.makeUintType(32), 2);
+            break;
+        }
         {
             const glslang::TSampler& sampler = type.getSampler();
             std::string debugName;
@@ -7260,6 +7281,74 @@ spv::Id TGlslangToSpvTraverser::makeHeapOffsetId(const glslang::TType& type)
 //  - use the SPIR-V inferred type instead of another conversion of the glslang type
 //    (avoids unnecessary work and possible type punning for structures)
 //  - do conversion of concrete to abstract type
+spv::Id TGlslangToSpvTraverser::mglBindlessTable(spv::Id elementType, unsigned int count, const char* name)
+{
+    spv::Id arrayType = builder.makeArrayType(elementType, builder.makeUintConstant(count), 0);
+    spv::Id var = builder.createVariable(spv::NoPrecision, spv::StorageClass::UniformConstant, arrayType, name);
+
+    builder.addDecoration(var, spv::Decoration::DescriptorSet, mglBindlessSet++);
+    builder.addDecoration(var, spv::Decoration::Binding, 0);
+
+    if (glslangIntermediate->getSpv().spv >= glslang::EShTargetSpv_1_4)
+        iOSet.insert(var);
+
+    return var;
+}
+
+spv::Id TGlslangToSpvTraverser::mglBindlessLookup(const glslang::TType& type, spv::Id handle)
+{
+    glslang::TType opaque;
+    opaque.shallowCopy(type);
+    opaque.getQualifier().layoutBindlessSampler = false;
+    opaque.getQualifier().layoutBindlessImage = false;
+
+    spv::Id uint = builder.makeUintType(32);
+    spv::Id uvec2 = builder.makeVectorType(uint, 2);
+
+    if (builder.getTypeId(handle) != uvec2)
+        handle = builder.createUnaryOp(spv::Op::OpBitcast, uvec2, handle);
+
+    spv::Id opaqueType = convertGlslangToSpvType(opaque, glslang::ElpNone, opaque.getQualifier(), false);
+    bool combined = builder.isSampledImageType(opaqueType);
+    spv::Id imageType = opaqueType;
+
+    if (combined) {
+        glslang::TType image;
+        image.shallowCopy(opaque);
+        image.getSampler().combined = false;
+        imageType = convertGlslangToSpvType(image, glslang::ElpNone, image.getQualifier(), false);
+    }
+
+    auto found = mglBindlessTextures.find(imageType);
+    spv::Id textures;
+
+    if (found == mglBindlessTextures.end()) {
+        std::string name = "mglBindlessTex" + std::to_string(mglBindlessTextures.size());
+        textures = mglBindlessTable(imageType, 32768, name.c_str());
+        mglBindlessTextures[imageType] = textures;
+    } else
+        textures = found->second;
+
+    spv::Id slot = builder.createCompositeExtract(handle, uint, 0);
+    spv::Id texPtr = builder.createOp(spv::Op::OpAccessChain,
+        builder.makePointer(spv::StorageClass::UniformConstant, imageType), { textures, slot });
+    spv::Id tex = builder.createLoad(texPtr, spv::NoPrecision);
+
+    if (!combined)
+        return tex;
+
+    if (mglBindlessSamplers == spv::NoResult)
+        mglBindlessSamplers = mglBindlessTable(builder.makeSamplerType(""), 1024, "mglBindlessSmp");
+
+    spv::Id high = builder.createCompositeExtract(handle, uint, 1);
+    spv::Id which = builder.createBinOp(spv::Op::OpBitwiseAnd, uint, high, builder.makeUintConstant(1023));
+    spv::Id smpPtr = builder.createOp(spv::Op::OpAccessChain,
+        builder.makePointer(spv::StorageClass::UniformConstant, builder.makeSamplerType("")), { mglBindlessSamplers, which });
+    spv::Id smp = builder.createLoad(smpPtr, spv::NoPrecision);
+
+    return builder.createBinOp(spv::Op::OpSampledImage, opaqueType, tex, smp);
+}
+
 spv::Id TGlslangToSpvTraverser::accessChainLoad(const glslang::TType& type)
 {
     spv::Id nominalTypeId = builder.accessChainGetInferredType();
@@ -7292,6 +7381,10 @@ spv::Id TGlslangToSpvTraverser::accessChainLoad(const glslang::TType& type)
     if (type.getBasicType() == glslang::EbtBool) {
         loadedId = convertLoadedBoolInUniformToUint(type, nominalTypeId, loadedId);
     }
+
+    if (type.getBasicType() == glslang::EbtSampler && !type.isArray() &&
+        builder.isVectorType(builder.getTypeId(loadedId)))
+        loadedId = mglBindlessLookup(type, loadedId);
 
     if (!builder.getAccessChain().descHeapInfo.descHeapInstId.empty()) {
         for (auto heapInst : builder.getAccessChain().descHeapInfo.descHeapInstId)

@@ -446,8 +446,8 @@ void TParseVersions::initializeExtensionBehavior()
 
     extensionBehavior[E_GL_EXT_shader_invocation_reorder]              = EBhDisable;
 
-    // Record extensions not for spv.
-    spvUnsupportedExt.push_back(E_GL_ARB_bindless_texture);
+    // GL_ARB_bindless_texture is lowered by GlslangToSpv into a table lookup,
+    // so MGL lets it through here.
 }
 
 // Get code that is not part of a shared symbol table, is specific to this shader,

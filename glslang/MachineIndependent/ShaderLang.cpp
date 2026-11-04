@@ -2111,10 +2111,51 @@ bool TProgram::crossStageCheck(EShMessages messages) {
 
         virtual void visitSymbol(TIntermSymbol* symbol)
         {
+            TType& type = symbol->getWritableType();
+            bool resized = false;
+
+            // MGL: a block member array sized by its use, ahead of the last
+            // member, moves everything after it once its size is known
+            if (type.getBasicType() == EbtBlock && type.isStruct() && type.getStruct()->size() > 1) {
+                const TTypeList& members = *type.getStruct();
+                for (size_t m = 0; m + 1 < members.size(); ++m)
+                    if (members[m].type->isUnsizedArray())
+                        resized = true;
+            }
+
             // Implicitly size arrays.
             // If an unsized array is left as unsized, it effectively
             // becomes run-time sized.
-            symbol->getWritableType().adoptImplicitArraySizes(false);
+            type.adoptImplicitArraySizes(false);
+
+            if (resized)
+                relayout(type);
+        }
+
+        // lays a std140/std430 block's members out again, keeping any offset
+        // that already sits past where the member would otherwise go
+        static void relayout(TType& type)
+        {
+            TLayoutPacking packing = type.getQualifier().layoutPacking;
+            if (packing != ElpStd140 && packing != ElpStd430 && packing != ElpScalar)
+                return;
+
+            TTypeList& members = *type.getWritableStruct();
+            int offset = 0;
+            for (size_t m = 0; m < members.size(); ++m) {
+                TQualifier& mq = members[m].type->getQualifier();
+                TLayoutMatrix sub = mq.layoutMatrix;
+                int size, stride;
+                int align = TIntermediate::getMemberAlignment(*members[m].type, size, stride, packing,
+                    sub != ElmNone ? sub == ElmRowMajor : type.getQualifier().layoutMatrix == ElmRowMajor);
+                if (mq.hasAlign())
+                    align = std::max(align, (int)mq.layoutAlign);
+                RoundToPow2(offset, align);
+                if (mq.hasOffset())
+                    offset = std::max(offset, (int)mq.layoutOffset);
+                mq.layoutOffset = offset;
+                offset += size;
+            }
         }
     } finalLinkTraverser;
 
