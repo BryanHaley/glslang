@@ -541,7 +541,8 @@ struct TSymbolValidater
             // validate stage in;
             if (preStage == EShLangCount)
                 return;
-            if (TSymbolTable::isBuiltInSymbol(base->getId()))
+            // a redeclared gl_PerVertex is still built in
+            if (TSymbolTable::isBuiltInSymbol(base->getId()) || name.compare(0, 3, "gl_") == 0)
                 return;
             if (outVarMaps[preStage] != nullptr) {
                 auto ent2 = outVarMaps[preStage]->find(name);
@@ -623,7 +624,7 @@ struct TSymbolValidater
             // validate stage out;
             if (nextStage == EShLangCount)
                 return;
-            if (TSymbolTable::isBuiltInSymbol(base->getId()))
+            if (TSymbolTable::isBuiltInSymbol(base->getId()) || name.compare(0, 3, "gl_") == 0)
                 return;
             if (inVarMaps[nextStage] != nullptr) {
                 auto ent2 = inVarMaps[nextStage]->find(name);
