@@ -145,7 +145,9 @@ public:
                 if (type.isArray() && type.getBasicType() == EbtBlock) {
                     blowUpIOAggregate(input, baseName, TType(type, 0));
                 } else {
-                    blowUpIOAggregate(input, baseName, type);
+                    // MGL: struct members take their locations from the variable's
+                    int location = type.getQualifier().hasLocation() ? (int)type.getQualifier().layoutLocation : -1;
+                    blowUpIOAggregate(input, baseName, type, location, type.getQualifier().isArrayedIo(intermediate.getStage()));
                 }
             } else {
                 TReflection::TNameToIndex::const_iterator it = ioMapper.find(name.c_str());
@@ -479,9 +481,11 @@ public:
     }
 
     // similar to blowUpActiveAggregate, but with simpler rules and no dereferences to follow.
-    void blowUpIOAggregate(bool input, const TString &baseName, const TType &type)
+    void blowUpIOAggregate(bool input, const TString &baseName, const TType &type, int location = -1,
+                           bool perVertex = false)
     {
         TString name = baseName;
+        EShLanguage stage = intermediate.getStage();
 
         // if the type is still too coarse a granularity, this is still an aggregate to expand, expand it...
         if (! isReflectionGranularity(type)) {
@@ -492,8 +496,10 @@ public:
                     TString newBaseName = name;
                     newBaseName.append(TString("[") + String(i) + "]");
                     TType derefType(type, 0);
+                    int at = location < 0 || perVertex ? location
+                           : location + i * TIntermediate::computeTypeLocationSize(derefType, stage);
 
-                    blowUpIOAggregate(input, newBaseName, derefType);
+                    blowUpIOAggregate(input, newBaseName, derefType, at);
                 }
             } else {
                 // Visit all members of this aggregate, and for each one,
@@ -510,8 +516,12 @@ public:
                         newBaseName.append(".");
                     newBaseName.append(typeList[i].type->getFieldName());
                     TType derefType(type, i);
+                    int at = derefType.getQualifier().hasLocation() ? (int)derefType.getQualifier().layoutLocation
+                                                                     : location;
 
-                    blowUpIOAggregate(input, newBaseName, derefType);
+                    blowUpIOAggregate(input, newBaseName, derefType, at);
+                    if (at >= 0)
+                        location = at + TIntermediate::computeTypeLocationSize(derefType, stage);
                 }
             }
 
@@ -532,8 +542,12 @@ public:
         TReflection::TNameToIndex::const_iterator it = reflection.nameToIndex.find(namespacedName);
         if (it == reflection.nameToIndex.end()) {
             reflection.nameToIndex[namespacedName] = (int)ioItems.size();
+            TType located;
+            located.shallowCopy(type);
+            if (location >= 0)
+                located.getQualifier().layoutLocation = location;
             ioItems.push_back(
-                TObjectReflection(name.c_str(), type, 0, mapToGlType(type), mapToGlArraySize(type), 0));
+                TObjectReflection(name.c_str(), located, 0, mapToGlType(type), mapToGlArraySize(type), 0));
 
             EShLanguageMask& stages = ioItems.back().stages;
             stages = static_cast<EShLanguageMask>(stages | 1 << intermediate.getStage());

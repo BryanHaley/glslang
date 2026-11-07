@@ -1300,7 +1300,7 @@ void TDefaultGlslIoResolver::reserverStorageSlot(TVarEntryInfo& ent, TInfoSink& 
             TVarSlotMap& varSlotMap = storageSlotMap[storageKey];
             TVarSlotMap::iterator iter = varSlotMap.find(name);
             if (iter == varSlotMap.end()) {
-                int numLocations = TIntermediate::computeTypeUniformLocationSize(type);
+                int numLocations = computeTypeLocationSize(type, stage);
                 reserveSlot(0, storageKey, location, numLocations);
                 varSlotMap[name] = location;
             } else {
