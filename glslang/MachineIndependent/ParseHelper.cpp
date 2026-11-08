@@ -5655,7 +5655,9 @@ void TParseContext::globalQualifierTypeCheck(const TSourceLoc& loc, const TQuali
         profileRequires(loc, ~EEsProfile, 130, nullptr, "non-float shader input/output");
     }
 
-    if (!qualifier.flat && !qualifier.isExplicitInterpolation() && !qualifier.isPervertexNV() && !qualifier.isPervertexEXT()) {
+    // a per-primitive input is never interpolated
+    if (!qualifier.flat && !qualifier.isExplicitInterpolation() && !qualifier.isPervertexNV() && !qualifier.isPervertexEXT() &&
+        !qualifier.perPrimitiveNV) {
         if (isTypeInt(publicType.basicType) ||
             publicType.basicType == EbtDouble ||
             (publicType.userDef && (   publicType.userDef->containsBasicType(EbtInt)
