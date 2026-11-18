@@ -471,14 +471,10 @@ int TPpContext::eval(int token, int precedence, bool shortCircuit, int& res, boo
     TSourceLoc loc = ppToken->loc;  // because we sometimes read the newline before reporting the error
     if (token == PpAtomIdentifier) {
         if (strcmp("defined", ppToken->name) == 0) {
-            if (! parseContext.isReadingHLSL() && isMacroInput()) {
-                if (parseContext.relaxedErrors())
-                    parseContext.ppWarn(ppToken->loc, "nonportable when expanded from macros for preprocessor expression",
-                        "defined", "");
-                else
-                    parseContext.ppError(ppToken->loc, "cannot use in preprocessor expression when expanded from macros",
-                        "defined", "");
-            }
+            // MGL: OpenGL ES drivers take this, and the ES conformance tests expect them to
+            if (! parseContext.isReadingHLSL() && isMacroInput())
+                parseContext.ppWarn(ppToken->loc, "nonportable when expanded from macros for preprocessor expression",
+                    "defined", "");
             bool needclose = 0;
             token = scanToken(ppToken);
             if (token == '(') {
